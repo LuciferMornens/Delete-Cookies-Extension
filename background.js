@@ -26,15 +26,29 @@ initializeState().catch(error => {
   console.error('Failed to initialize:', error);
 });
 
-// Listen for toggle state changes
+// Maximum number of tabs to track
+const MAX_TABS = 100;
+
+// Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Validate message origin
+  if (!sender.id || sender.id !== chrome.runtime.id) {
+    console.error('Invalid message origin');
+    return;
+  }
+
   if (message.type === 'toggleStateChanged') {
     isEnabled = message.enabled;
     if (!isEnabled) {
       // Clear all stored tab data when extension is disabled
       tabData = {};
     }
+  } else if (message.type === 'getState') {
+    sendResponse({ enabled: isEnabled });
   }
+  
+  // Required for async response
+  return true;
 });
 
 // Listen for tab focus changes
@@ -71,6 +85,10 @@ function isValidUrl(url) {
   }
 }
 
+// Cache for domain cookies to improve performance
+const domainCookieCache = new Map();
+const CACHE_TIMEOUT = 5000; // 5 seconds
+
 // Helper function to delete cookies for a domain
 async function deleteCookiesForDomain(domain) {
   if (!domain || !isEnabled || isShuttingDown) return;
@@ -78,7 +96,20 @@ async function deleteCookiesForDomain(domain) {
   try {
     // Handle both exact domain and its subdomains
     const mainDomain = domain.replace(/^www\./, '');
+    
+    // Check cache first
+    const cachedTime = domainCookieCache.get(mainDomain)?.timestamp;
+    if (cachedTime && Date.now() - cachedTime < CACHE_TIMEOUT) {
+      console.log(`Using cached cookies for ${mainDomain}`);
+      return;
+    }
+    
     const cookies = await chrome.cookies.getAll({});
+    
+    // Update cache
+    domainCookieCache.set(mainDomain, {
+      timestamp: Date.now()
+    });
     
     // Filter cookies that match the domain or its subdomains
     const relevantCookies = cookies.filter(cookie => {
@@ -152,10 +183,26 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
 });
 
 // Listen for tab creation
-chrome.tabs.onCreated.addListener((tab) => {
+chrome.tabs.onCreated.addListener(async (tab) => {
+  // Check if we're in incognito mode
+  if (tab.incognito) {
+    console.log('Skipping incognito tab');
+    return;
+  }
+
   if (tab.url && isValidUrl(tab.url)) {
     const domain = getDomain(tab.url);
     if (domain) {
+      // Enforce tab limit
+      const tabIds = Object.keys(tabData);
+      if (tabIds.length >= MAX_TABS) {
+        // Remove oldest tab data
+        const oldestTabId = tabIds.reduce((oldest, current) => 
+          tabData[current].timestamp < tabData[oldest].timestamp ? current : oldest
+        );
+        delete tabData[oldestTabId];
+      }
+
       tabData[tab.id] = {
         url: tab.url,
         domain: domain,
