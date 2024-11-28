@@ -44,11 +44,18 @@ async function deleteCookiesForDomain(domain) {
   if (!domain || !isEnabled) return;
   
   try {
-    // Get all cookies for the domain
-    const cookies = await chrome.cookies.getAll({ domain });
+    // Handle both exact domain and its subdomains
+    const mainDomain = domain.replace(/^www\./, '');
+    const cookies = await chrome.cookies.getAll({});
+    
+    // Filter cookies that match the domain or its subdomains
+    const relevantCookies = cookies.filter(cookie => {
+      const cookieDomain = cookie.domain.replace(/^\./, ''); // Remove leading dot
+      return cookieDomain.includes(mainDomain) || mainDomain.includes(cookieDomain);
+    });
 
     // Delete each cookie
-    const deletePromises = cookies.map(cookie => {
+    const deletePromises = relevantCookies.map(cookie => {
       const protocol = cookie.secure ? 'https:' : 'http:';
       const cookieUrl = `${protocol}//${cookie.domain}${cookie.path}`;
       
@@ -59,16 +66,16 @@ async function deleteCookiesForDomain(domain) {
     });
 
     await Promise.all(deletePromises);
-    console.log(`Successfully deleted ${cookies.length} cookies for ${domain}`);
+    console.log(`Successfully deleted ${relevantCookies.length} cookies for ${domain} and subdomains`);
   } catch (error) {
     console.error(`Error deleting cookies for ${domain}:`, error);
   }
 }
 
-// Listen for tab updates
+// Listen for tab updates and history state changes
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.url && isValidUrl(changeInfo.url)) {
-    const newDomain = getDomain(changeInfo.url);
+  if ((changeInfo.url || changeInfo.status === 'complete') && tab.url && isValidUrl(tab.url)) {
+    const newDomain = getDomain(tab.url);
     const oldData = tabData[tabId];
     
     // If there was a previous domain and it's different from the new one, delete its cookies
@@ -78,10 +85,30 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     
     if (newDomain) {
       tabData[tabId] = {
-        url: changeInfo.url,
+        url: tab.url,
         domain: newDomain,
         timestamp: Date.now()
       };
+    }
+  }
+});
+
+// Listen for history state changes
+chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
+  if (isValidUrl(details.url)) {
+    const newDomain = getDomain(details.url);
+    const oldData = tabData[details.tabId];
+    
+    if (oldData && oldData.domain && oldData.domain !== newDomain) {
+      await deleteCookiesForDomain(oldData.domain);
+      
+      if (newDomain) {
+        tabData[details.tabId] = {
+          url: details.url,
+          domain: newDomain,
+          timestamp: Date.now()
+        };
+      }
     }
   }
 });
