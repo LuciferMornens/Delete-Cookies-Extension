@@ -32,7 +32,8 @@ function getDomain(url) {
 // Helper function to check if URL is valid
 function isValidUrl(url) {
   try {
-    return url && url.startsWith('http');
+    const urlObj = new URL(url);
+    return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
   } catch {
     return false;
   }
@@ -65,13 +66,20 @@ async function deleteCookiesForDomain(domain) {
 }
 
 // Listen for tab updates
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.url && isValidUrl(changeInfo.url)) {
-    const domain = getDomain(changeInfo.url);
-    if (domain) {
+    const newDomain = getDomain(changeInfo.url);
+    const oldData = tabData[tabId];
+    
+    // If there was a previous domain and it's different from the new one, delete its cookies
+    if (oldData && oldData.domain && oldData.domain !== newDomain) {
+      await deleteCookiesForDomain(oldData.domain);
+    }
+    
+    if (newDomain) {
       tabData[tabId] = {
         url: changeInfo.url,
-        domain: domain,
+        domain: newDomain,
         timestamp: Date.now()
       };
     }
