@@ -124,7 +124,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       tabData[tabId] = {
         url: tab.url,
         domain: newDomain,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        windowId: tab.windowId
       };
     }
   }
@@ -194,14 +195,49 @@ chrome.runtime.onSuspend.addListener(() => {
   tabData = {};
 });
 
-// Clean up old tab data periodically (every 30 minutes)
-setInterval(() => {
+// Periodic cleanup of stale data and orphaned cookies
+setInterval(async () => {
+  if (!isEnabled || isShuttingDown) return;
+
   const now = Date.now();
   const thirtyMinutes = 30 * 60 * 1000;
   
+  // Clean up old tab data
   Object.entries(tabData).forEach(([tabId, data]) => {
     if (now - data.timestamp > thirtyMinutes) {
       delete tabData[tabId];
     }
   });
-}, 30 * 60 * 1000); 
+
+  // Clean up any cookies that might have been missed
+  try {
+    const cookies = await chrome.cookies.getAll({});
+    const activeDomains = new Set(Object.values(tabData).map(data => data.domain));
+    
+    const orphanedCookies = cookies.filter(cookie => {
+      if (!cookie.domain) return false;
+      const cookieDomain = cookie.domain.replace(/^\./, '');
+      return !Array.from(activeDomains).some(domain => 
+        cookieDomain.includes(domain) || domain.includes(cookieDomain)
+      );
+    });
+
+    if (orphanedCookies.length > 0) {
+      console.log(`Cleaning up ${orphanedCookies.length} orphaned cookies`);
+      for (const cookie of orphanedCookies) {
+        const protocol = cookie.secure ? 'https:' : 'http:';
+        const cookieUrl = `${protocol}//${cookie.domain}${cookie.path}`;
+        try {
+          await chrome.cookies.remove({
+            url: cookieUrl,
+            name: cookie.name,
+          });
+        } catch (error) {
+          console.warn(`Failed to delete orphaned cookie ${cookie.name}:`, error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error during periodic cleanup:', error);
+  }
+}, 30 * 60 * 1000);
