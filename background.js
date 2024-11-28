@@ -4,17 +4,42 @@ let isEnabled = false;
 
 // Initialize extension state
 async function initializeState() {
-  const state = await chrome.storage.local.get('enabled');
-  isEnabled = state.enabled ?? false;
+  try {
+    const state = await chrome.storage.local.get('enabled');
+    isEnabled = state.enabled ?? false;
+    console.log('Extension initialized, enabled:', isEnabled);
+  } catch (error) {
+    console.error('Failed to initialize extension:', error);
+    isEnabled = false;
+  }
 }
 
 // Initialize state immediately
-initializeState();
+initializeState().catch(error => {
+  console.error('Failed to initialize:', error);
+});
 
 // Listen for toggle state changes
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'toggleStateChanged') {
     isEnabled = message.enabled;
+    if (!isEnabled) {
+      // Clear all stored tab data when extension is disabled
+      tabData = {};
+    }
+  }
+});
+
+// Listen for tab focus changes
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  if (!isEnabled) return;
+  
+  const previousTabs = Object.keys(tabData).filter(id => id != activeInfo.tabId);
+  for (const tabId of previousTabs) {
+    const tabInfo = tabData[tabId];
+    if (tabInfo && tabInfo.domain) {
+      await deleteCookiesForDomain(tabInfo.domain);
+    }
   }
 });
 
