@@ -1,11 +1,12 @@
-// Store tab URLs and their domains
-let tabData = {};
+// Store tab URLs and their domains with a Map for better performance
+const tabData = new Map();
 let isEnabled = false;
 let isShuttingDown = false;
+let pendingDeletions = new Set();
 
 // Handle browser startup
 chrome.runtime.onStartup.addListener(async () => {
-  tabData = {}; // Reset on browser startup
+  tabData.clear(); // Reset on browser startup
   await initializeState();
 });
 
@@ -41,7 +42,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isEnabled = message.enabled;
     if (!isEnabled) {
       // Clear all stored tab data when extension is disabled
-      tabData = {};
+      tabData.clear();
     }
   } else if (message.type === 'getState') {
     sendResponse({ enabled: isEnabled });
@@ -51,17 +52,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-// Listen for tab focus changes
+// Listen for tab focus changes with debouncing
+let focusDebounceTimer;
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   if (!isEnabled) return;
   
-  const previousTabs = Object.keys(tabData).filter(id => id != activeInfo.tabId);
-  for (const tabId of previousTabs) {
-    const tabInfo = tabData[tabId];
-    if (tabInfo && tabInfo.domain) {
-      await deleteCookiesForDomain(tabInfo.domain);
+  clearTimeout(focusDebounceTimer);
+  focusDebounceTimer = setTimeout(async () => {
+    const currentTabs = Array.from(tabData.entries());
+    const previousTabs = currentTabs.filter(([id]) => id != activeInfo.tabId);
+    
+    for (const [tabId, tabInfo] of previousTabs) {
+      if (tabInfo?.domain && !pendingDeletions.has(tabInfo.domain)) {
+        pendingDeletions.add(tabInfo.domain);
+        try {
+          await deleteCookiesForDomain(tabInfo.domain);
+        } finally {
+          pendingDeletions.delete(tabInfo.domain);
+        }
+      }
     }
-  }
+  }, 150); // Debounce time for rapid tab switching
 });
 
 // Helper function to get domain from URL
@@ -144,20 +155,20 @@ async function deleteCookiesForDomain(domain) {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if ((changeInfo.url || changeInfo.status === 'complete') && tab.url && isValidUrl(tab.url)) {
     const newDomain = getDomain(tab.url);
-    const oldData = tabData[tabId];
+    const oldData = tabData.get(tabId);
     
     // If there was a previous domain and it's different from the new one, delete its cookies
-    if (oldData && oldData.domain && oldData.domain !== newDomain) {
+    if (oldData?.domain && oldData.domain !== newDomain) {
       await deleteCookiesForDomain(oldData.domain);
     }
     
     if (newDomain) {
-      tabData[tabId] = {
+      tabData.set(tabId, {
         url: tab.url,
         domain: newDomain,
         timestamp: Date.now(),
         windowId: tab.windowId
-      };
+      });
     }
   }
 });
@@ -166,25 +177,25 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
   if (isValidUrl(details.url)) {
     const newDomain = getDomain(details.url);
-    const oldData = tabData[details.tabId];
+    const oldData = tabData.get(details.tabId);
     
-    if (oldData && oldData.domain && oldData.domain !== newDomain) {
+    if (oldData?.domain && oldData.domain !== newDomain) {
       await deleteCookiesForDomain(oldData.domain);
       
       if (newDomain) {
-        tabData[details.tabId] = {
+        tabData.set(details.tabId, {
           url: details.url,
           domain: newDomain,
-          timestamp: Date.now()
-        };
+          timestamp: Date.now(),
+          windowId: oldData.windowId
+        });
       }
     }
   }
 });
 
-// Listen for tab creation
+// Listen for tab creation with memory management
 chrome.tabs.onCreated.addListener(async (tab) => {
-  // Check if we're in incognito mode
   if (tab.incognito) {
     console.log('Skipping incognito tab');
     return;
@@ -193,31 +204,40 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   if (tab.url && isValidUrl(tab.url)) {
     const domain = getDomain(tab.url);
     if (domain) {
-      // Enforce tab limit
-      const tabIds = Object.keys(tabData);
-      if (tabIds.length >= MAX_TABS) {
-        // Remove oldest tab data
-        const oldestTabId = tabIds.reduce((oldest, current) => 
-          tabData[current].timestamp < tabData[oldest].timestamp ? current : oldest
-        );
-        delete tabData[oldestTabId];
+      // Enforce tab limit with Map
+      if (tabData.size >= MAX_TABS) {
+        let oldestTabId = null;
+        let oldestTimestamp = Date.now();
+        
+        // Find oldest tab
+        for (const [id, data] of tabData.entries()) {
+          if (data.timestamp < oldestTimestamp) {
+            oldestTimestamp = data.timestamp;
+            oldestTabId = id;
+          }
+        }
+        
+        if (oldestTabId) {
+          tabData.delete(oldestTabId);
+        }
       }
 
-      tabData[tab.id] = {
+      tabData.set(tab.id, {
         url: tab.url,
         domain: domain,
-        timestamp: Date.now()
-      };
+        timestamp: Date.now(),
+        windowId: tab.windowId
+      });
     }
   }
 });
 
 // Listen for tab removal
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-  const tabInfo = tabData[tabId];
+  const tabInfo = tabData.get(tabId);
   if (tabInfo && isEnabled && !isShuttingDown) {
     await deleteCookiesForDomain(tabInfo.domain);
-    delete tabData[tabId];
+    tabData.delete(tabId);
   }
 });
 
@@ -226,12 +246,12 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   if (!isEnabled) return;
   
   // Get all tabs that were in this window
-  const windowTabs = Object.entries(tabData)
+  const windowTabs = Array.from(tabData.entries())
     .filter(([_, data]) => data.windowId === windowId);
     
   for (const [tabId, data] of windowTabs) {
     await deleteCookiesForDomain(data.domain);
-    delete tabData[tabId];
+    tabData.delete(tabId);
   }
 });
 
@@ -239,7 +259,7 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 chrome.runtime.onSuspend.addListener(() => {
   isShuttingDown = true;
   // Cleanup
-  tabData = {};
+  tabData.clear();
 });
 
 // Periodic cleanup of stale data and orphaned cookies
@@ -250,16 +270,16 @@ setInterval(async () => {
   const thirtyMinutes = 30 * 60 * 1000;
   
   // Clean up old tab data
-  Object.entries(tabData).forEach(([tabId, data]) => {
+  for (const [tabId, data] of tabData.entries()) {
     if (now - data.timestamp > thirtyMinutes) {
-      delete tabData[tabId];
+      tabData.delete(tabId);
     }
-  });
+  }
 
   // Clean up any cookies that might have been missed
   try {
     const cookies = await chrome.cookies.getAll({});
-    const activeDomains = new Set(Object.values(tabData).map(data => data.domain));
+    const activeDomains = new Set(Array.from(tabData.values()).map(data => data.domain));
     
     const orphanedCookies = cookies.filter(cookie => {
       if (!cookie.domain) return false;
