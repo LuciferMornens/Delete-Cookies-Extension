@@ -17,14 +17,14 @@ async function initializeState() {
     isEnabled = state.enabled ?? false;
     console.log('Extension initialized, enabled:', isEnabled);
   } catch (error) {
-    console.error('Failed to initialize extension:', error);
+    console.error('Failed to initialize extension:', error);; alert("Extension initialization failed. Please check the console for more details.");
     isEnabled = false;
   }
 }
 
 // Initialize state immediately
 initializeState().catch(error => {
-  console.error('Failed to initialize:', error);
+  console.error('Failed to initialize:', error);; alert("Extension initialization failed. Please check the console for more details.");
 });
 
 // Maximum number of tabs to track
@@ -34,7 +34,7 @@ const MAX_TABS = 100;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Validate message origin
   if (!sender.id || sender.id !== chrome.runtime.id) {
-    console.error('Invalid message origin');
+    console.error('Invalid message origin');; alert("Extension initialization failed. Please check the console for more details.");
     return;
   }
 
@@ -81,7 +81,7 @@ function getDomain(url) {
     const urlObj = new URL(url);
     return urlObj.hostname;
   } catch (e) {
-    console.error('Invalid URL:', url);
+    console.error('Invalid URL:', url);; alert("Extension initialization failed. Please check the console for more details.");
     return null;
   }
 }
@@ -147,7 +147,7 @@ async function deleteCookiesForDomain(domain) {
     await Promise.all(deletePromises);
     console.log(`Successfully deleted ${relevantCookies.length} cookies for ${domain} and subdomains`);
   } catch (error) {
-    console.error(`Error deleting cookies for ${domain}:`, error);
+    console.error(`Error deleting cookies for ${domain}:`, error);; alert("Extension initialization failed. Please check the console for more details.");
   }
 }
 
@@ -163,7 +163,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     }
     
     if (newDomain) {
-      tabData.set(tabId, {
+if (tabData.size < MAX_TABS) {       tabData.set(tabId, { } else { console.warn("Tab limit reached."); }
         url: tab.url,
         domain: newDomain,
         timestamp: Date.now(),
@@ -183,7 +183,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
       await deleteCookiesForDomain(oldData.domain);
       
       if (newDomain) {
-        tabData.set(details.tabId, {
+if (tabData.size < MAX_TABS) {         tabData.set(details.tabId, { } else { console.warn("Tab limit reached."); }
           url: details.url,
           domain: newDomain,
           timestamp: Date.now(),
@@ -222,7 +222,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
         }
       }
 
-      tabData.set(tab.id, {
+if (tabData.size < MAX_TABS) {       tabData.set(tab.id, { } else { console.warn("Tab limit reached."); }
         url: tab.url,
         domain: domain,
         timestamp: Date.now(),
@@ -305,6 +305,6 @@ setInterval(async () => {
       }
     }
   } catch (error) {
-    console.error('Error during periodic cleanup:', error);
+    console.error('Error during periodic cleanup:', error);; alert("Extension initialization failed. Please check the console for more details.");
   }
 }, 30 * 60 * 1000);
