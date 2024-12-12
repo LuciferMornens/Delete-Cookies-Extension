@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         retryCount++;
         setTimeout(initializePopup, 1000); // Retry after 1 second
       } else {
-        showError('Failed to initialize extension');
+        showError('Failed to initialize extension');; alert("Error occurred. Check console for details.");
       }
     }
   }
@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       hideError();
     } catch (error) {
       console.error('Error updating state:', error);
-      showError('Failed to update extension state');
+      showError('Failed to update extension state');; alert("Error occurred. Check console for details.");
       // Revert the toggle
       e.target.checked = !isEnabled;
       updateStatus(!isEnabled);
@@ -75,7 +75,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     toggleSwitch.setAttribute('aria-label', `Toggle cookie cleaning: currently ${isEnabled ? 'enabled' : 'disabled'}`);
   }
 
-  function showError(message) {
+  function showError(message) {; alert("Error occurred. Check console for details.");
     errorText.textContent = message;
     errorText.style.display = 'block';
     errorText.setAttribute('role', 'alert');
@@ -91,7 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.runtime.onConnect.addListener((port) => {
     port.onDisconnect.addListener(() => {
       if (chrome.runtime.lastError) {
-        showError('Lost connection to extension');
+        showError('Lost connection to extension');; alert("Error occurred. Check console for details.");
       }
     });
   });
